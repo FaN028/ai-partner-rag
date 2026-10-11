@@ -20,6 +20,7 @@ from openai import OpenAI
 
 from session import generate_session_name, save_session
 from rag import build_context_block, model
+from agent import run_agent, save_trace
 import ui
 
 
@@ -77,6 +78,39 @@ def stream_chat_response(client: OpenAI, messages: list[dict]) -> Iterator[str]:
             yield content
 
 
+def run_agent_turn(client: OpenAI, prompt: str, system_prompt: str, history: list[dict]) -> None:
+    """Agent 模式：把这一轮交给 agent.py，由模型自己决定调不调工具、调哪个。
+
+    注意两点和"知识库模式"的区别：
+      1. 这里不预先检索知识库——要不要查，交给模型判断（那才是 Agent 的意义）。
+      2. 这里拿不到流式输出——必须先等模型把工具调完、给出最终回答，
+         过程分好几轮，没法边生成边显示。
+    """
+    try:
+        with st.spinner("模型正在思考、按需调用工具…"):
+            answer, trace = run_agent(client, prompt, system_prompt, history)
+    except Exception as exc:
+        st.error(f"Agent 调用失败：{exc}")
+        return
+
+    with st.chat_message("assistant"):
+        st.write(answer)
+
+    st.session_state.messages.append({"role": "assistant", "content": answer})
+    save_session()
+
+    # 轨迹落盘：Agent 每调一次工具就追加一行，方便事后复盘
+    save_trace(prompt, trace)
+
+    # 轨迹面板：套路和"📚 参考来源"一样，把"模型偷偷调了什么"变成看得见
+    if trace:
+        with st.expander(f"🔧 工具调用轨迹（{len(trace)} 次）"):
+            for step in trace:
+                st.markdown(f"**第 {step['round']} 轮 · `{step['tool']}`**")
+                st.caption(f"参数：{step['args']}")
+                st.code(str(step["result"])[:800], language=None)
+
+
 def init_session_state() -> None:
     """初始化程序运行期间需要保存的数据。"""
     if "messages" not in st.session_state:
@@ -108,6 +142,10 @@ def init_session_state() -> None:
         st.session_state.memory_chunks = []
     if "memory_vectors" not in st.session_state:
         st.session_state.memory_vectors = []
+
+    # —— 对话模式：知识库模式（默认，和原先一样）/ Agent 模式（模型自己决定调不调工具）——
+    if "chat_mode" not in st.session_state:
+        st.session_state.chat_mode = config.MODE_KB
 
 
 def main() -> None:
@@ -147,6 +185,13 @@ def main() -> None:
         st.session_state.nature,
     )
 
+    # —— 分支一：Agent 模式。把这一轮交给 agent.py，然后直接结束 ——
+    # history 要排除本轮这句（它作为 user_query 单独传进去，否则会重复）
+    if st.session_state.chat_mode == config.MODE_AGENT:
+        run_agent_turn(client, prompt, system_prompt, st.session_state.messages[:-1])
+        return
+
+    # —— 分支二：知识库模式（原先的老路径，一行逻辑都没改）——
     # 检索知识库
     context, cited = build_context_block(
         prompt,

@@ -130,4 +130,21 @@ def render_sidebar() -> None:
         )
         st.session_state.nature = nature or config.DEFAULT_NATURE
 
+        st.divider()
+
+        st.subheader("对话模式")
+        st.radio(
+            "模型怎么回答",
+            options=[config.MODE_KB, config.MODE_AGENT],
+            key="chat_mode",
+            help=(
+                "知识库模式：每问一句都先检索你的文档。\n\n"
+                "Agent 模式：模型自己判断要不要查资料、要不要算数、要不要看时间。"
+            ),
+        )
+        if st.session_state.chat_mode == config.MODE_AGENT:
+            st.caption("🔧 模型自己决定调用哪些工具，回答下方会显示调用轨迹。")
+        else:
+            st.caption("📚 每次提问都会先检索知识库原文。")
+
         render_knowledge_panel()
