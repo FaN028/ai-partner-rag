@@ -79,12 +79,11 @@ def stream_chat_response(client: OpenAI, messages: list[dict]) -> Iterator[str]:
 
 
 def run_agent_turn(client: OpenAI, prompt: str, system_prompt: str, history: list[dict]) -> None:
-    """Agent 模式：把这一轮交给 agent.py，由模型自己决定调不调工具、调哪个。
+    """Agent 模式下执行一轮对话：调用 agent.run_agent 并渲染结果。
 
-    注意两点和"知识库模式"的区别：
-      1. 这里不预先检索知识库——要不要查，交给模型判断（那才是 Agent 的意义）。
-      2. 这里拿不到流式输出——必须先等模型把工具调完、给出最终回答，
-         过程分好几轮，没法边生成边显示。
+    与「知识库模式」的差异：
+      1. 不预先检索知识库，是否检索由模型自行决定；
+      2. 无流式输出，需等待全部工具调用结束后一次性返回。
     """
     try:
         with st.spinner("模型正在思考、按需调用工具…"):
@@ -99,10 +98,10 @@ def run_agent_turn(client: OpenAI, prompt: str, system_prompt: str, history: lis
     st.session_state.messages.append({"role": "assistant", "content": answer})
     save_session()
 
-    # 轨迹落盘：Agent 每调一次工具就追加一行，方便事后复盘
+    # 轨迹落盘，供事后复盘与问题定位。
     save_trace(prompt, trace)
 
-    # 轨迹面板：套路和"📚 参考来源"一样，把"模型偷偷调了什么"变成看得见
+    # 工具调用轨迹面板（与「参考来源」面板同构）。
     if trace:
         with st.expander(f"🔧 工具调用轨迹（{len(trace)} 次）"):
             for step in trace:
@@ -185,14 +184,13 @@ def main() -> None:
         st.session_state.nature,
     )
 
-    # —— 分支一：Agent 模式。把这一轮交给 agent.py，然后直接结束 ——
-    # history 要排除本轮这句（它作为 user_query 单独传进去，否则会重复）
+    # Agent 模式：本轮交由 agent.run_agent 处理，处理完直接返回。
+    # history 排除本轮提问——它作为 user_query 单独传入，否则会重复。
     if st.session_state.chat_mode == config.MODE_AGENT:
         run_agent_turn(client, prompt, system_prompt, st.session_state.messages[:-1])
         return
 
-    # —— 分支二：知识库模式（原先的老路径，一行逻辑都没改）——
-    # 检索知识库
+    # 知识库模式：先检索知识库，再流式生成回答。
     context, cited = build_context_block(
         prompt,
         st.session_state.knowledge_chunks,

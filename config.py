@@ -12,8 +12,8 @@ DEFAULT_NICK_NAME = "小A"
 DEFAULT_NATURE = "活泼开朗的女生"
 
 # —— 对话模式 ——
-MODE_KB = "知识库模式"      # 老路径：每问一句都先检索知识库
-MODE_AGENT = "Agent 模式"   # 新路径：模型自己决定要不要调工具
+MODE_KB = "知识库模式"      # 每次提问均预先检索知识库
+MODE_AGENT = "Agent 模式"   # 由模型决定是否调用工具
 
 DEEPSEEK_API_KEY_ENV = "DEEPSEEK_API_KEY"
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"

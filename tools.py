@@ -1,14 +1,17 @@
 # ============================================================
-# tools.py —— Agent 可调用的工具：函数本体 + 注册表 + 声明表
+# tools.py —— Agent 工具集：函数实现 + 注册表 + 声明表
 # ============================================================
 import re
 from datetime import datetime
 
 
 def search_knowledge(query: str) -> str:
-    """在用户上传的私有知识库中检索与问题相关的片段，返回最相关的原文内容。"""
-    # 延迟导入：rag 在导入时会立刻加载 embedding 模型，
-    # 放在文件顶部会让整个 tools.py 无法在终端里快速测试。
+    """在私有知识库中检索与 query 相关的原文片段。
+
+    返回拼接后的原文片段；知识库未加载或未命中时返回提示文本。
+    """
+    # 延迟导入：rag 模块在导入时即加载 embedding 模型，
+    # 置于模块顶层会使本文件无法脱离模型独立导入与测试。
     try:
         import streamlit as st
         from rag import build_context_block
@@ -25,29 +28,33 @@ def search_knowledge(query: str) -> str:
     if not selected:
         return "知识库中没有找到相关内容。"
 
-    # 只返回原文，不夹带"请你如何作答"的指令——工具负责取数据，不负责下命令。
+    # 仅回填原文，不附加任何作答指令，避免工具越权干预模型生成策略。
     return "\n\n".join(f"【片段 {i}】\n{c}" for i, c in enumerate(selected, start=1))
 
 
 def calculate(expression: str) -> str:
-    """计算一个数学表达式并返回结果。只支持加减乘除和括号，不支持其他任何操作。"""
-    # 第一道防线：白名单。整串必须只由数字和运算符号组成，出现其他字符一律拒绝。
+    """计算四则运算表达式并返回字符串结果。
+
+    表达式由模型生成，直接求值存在任意代码执行风险，
+    因此依次执行白名单校验、剥离内置函数、异常兜底三层防护。
+    """
+    # 白名单：整串仅允许数字与 + - * / ( ) 及空白字符。
     if not re.fullmatch(r"[0-9+\-*/().\s]+", expression):
         return "只支持数字和 + - * / ( ) 运算。"
 
-    # 第二道防线：禁用全部内置函数；第三道防线：异常兜底。
     try:
+        # __builtins__ 置空，阻断 import / open / exec 等内置能力。
         return str(eval(expression, {"__builtins__": {}}, {}))
     except Exception as exc:
         return f"计算失败：{exc}"
 
 
 def get_current_time() -> str:
-    """获取当前的日期和时间。"""
+    """获取当前日期与时间，格式 YYYY-MM-DD HH:MM:SS。"""
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
-# —— 注册表：工具名 → 真正的函数（"后厨操作台"，给自己用的）——
+# 工具注册表：工具名 -> 可调用对象，供调度端按名派发。
 TOOLS = {
     "search_knowledge": search_knowledge,
     "calculate": calculate,
@@ -55,7 +62,8 @@ TOOLS = {
 }
 
 
-# —— 声明表：给模型看的说明书（"菜单"，模型只能看到这张）——
+# 工具声明表：下发至模型的 Function Calling Schema，模型仅可见此表。
+# 约束：name 须与 TOOLS 的键一致，parameters 中的参数名须与函数签名一致。
 TOOL_SCHEMAS = [
     {
         "type": "function",
