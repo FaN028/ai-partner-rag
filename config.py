@@ -3,7 +3,7 @@
 # ============================================================
 from pathlib import Path
 
-APP_TITLE = "私有知识库 RAG 问答系统"
+APP_TITLE = "私有知识库 RAG + Agent 问答系统"
 SESSIONS_DIR = Path("sessions")
 LOGO_PATH = Path("resources/WLive48x48.png")
 

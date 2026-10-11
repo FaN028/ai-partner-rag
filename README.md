@@ -1,4 +1,4 @@
-# 私有知识库 RAG 问答系统
+# 私有知识库 RAG + Agent 问答系统
 
 一个基于 **Streamlit + DeepSeek** 的问答系统，包含两个子系统：
 
