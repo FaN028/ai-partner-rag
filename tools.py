@@ -4,41 +4,35 @@
 import re
 from datetime import datetime
 
-# ============================================================
-# 知识库来源：界面模式读 Streamlit 会话，HTTP 模式读以下进程级存储
-# ============================================================
-_KNOWLEDGE: dict[str, list] = {"chunks": [], "vectors": [], "sources": []}
+import knowledge
 
-
+# ============================================================
+# 知识库来源：界面模式读 Streamlit 会话，HTTP 模式读服务端存储
+# （服务端存储按客户端隔离，并落盘到 config.KNOWLEDGE_DIR）
+# ============================================================
 def add_knowledge(chunks: list, vectors, source: str = "") -> int:
-    """向服务端知识库追加片段与向量，返回追加后的片段总数。"""
-    _KNOWLEDGE["chunks"].extend(chunks)
-    _KNOWLEDGE["vectors"].extend(vectors)
-    if source:
-        _KNOWLEDGE["sources"].append(source)
-    return len(_KNOWLEDGE["chunks"])
+    """向服务端知识库追加片段与向量并立即落盘，返回追加后的片段总数。"""
+    store = knowledge.get_store()
+    total = store.add(chunks, vectors, source)
+    store.save()
+    return total
 
 
 def clear_knowledge() -> None:
-    """清空服务端知识库。"""
-    _KNOWLEDGE["chunks"].clear()
-    _KNOWLEDGE["vectors"].clear()
-    _KNOWLEDGE["sources"].clear()
+    """清空服务端知识库（含已落盘文件）。"""
+    knowledge.get_store().clear()
 
 
 def knowledge_info() -> dict:
     """返回服务端知识库的当前状态。"""
-    return {
-        "sources": list(_KNOWLEDGE["sources"]),
-        "chunks": len(_KNOWLEDGE["chunks"]),
-    }
+    return knowledge.get_store().info()
 
 
 def _resolve_knowledge():
     """取当前可用的知识库 (chunks, vectors)。
 
     优先读取 Streamlit 会话状态（界面模式）；无可用会话状态时，
-    回退到服务端共享知识库（HTTP 模式）。
+    回退到服务端存储（HTTP 模式）。
     """
     try:
         import streamlit as st
@@ -50,7 +44,8 @@ def _resolve_knowledge():
     except Exception:
         pass
 
-    return _KNOWLEDGE["chunks"], _KNOWLEDGE["vectors"]
+    store = knowledge.get_store()
+    return store.chunks, store.vectors
 
 
 def search_knowledge(query: str) -> str:

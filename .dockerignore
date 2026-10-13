@@ -13,6 +13,7 @@ models/
 
 # 运行产物
 sessions/
+data/
 agent_trace.jsonl
 
 # 本地私人目录

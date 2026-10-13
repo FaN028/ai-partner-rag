@@ -5,6 +5,7 @@ from pathlib import Path
 
 APP_TITLE = "私有知识库 RAG + Agent 问答系统"
 SESSIONS_DIR = Path("sessions")
+KNOWLEDGE_DIR = Path("data/knowledge")   # 服务端知识库落盘目录（按客户端分文件夹）
 LOGO_PATH = Path("resources/WLive48x48.png")
 
 # 默认昵称 / 性格

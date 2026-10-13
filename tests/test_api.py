@@ -143,3 +143,32 @@ def test_delete_knowledge_clears_store(client):
 
     assert response.status_code == 200
     assert response.json() == {"sources": [], "chunks": 0}
+
+
+def test_knowledge_is_isolated_between_clients(client, monkeypatch):
+    """不同 X-Client-Id 应看到各自的知识库，互不干扰。"""
+    tools.clear_knowledge()
+    fake_rag = SimpleNamespace(
+        chunk_text=lambda text: [text],
+        model=SimpleNamespace(encode=lambda chunks: [[0.0]] * len(chunks)),
+    )
+    monkeypatch.setitem(sys.modules, "rag", fake_rag)
+
+    client.post(
+        "/knowledge",
+        json={"source": "a.md", "content": "alice 的资料"},
+        headers={"X-Client-Id": "alice"},
+    )
+
+    alice = client.get("/knowledge", headers={"X-Client-Id": "alice"}).json()
+    bob = client.get("/knowledge", headers={"X-Client-Id": "bob"}).json()
+
+    assert alice == {"sources": ["a.md"], "chunks": 1}
+    assert bob == {"sources": [], "chunks": 0}
+
+
+def test_cors_headers_are_returned(client):
+    response = client.get("/health", headers={"Origin": "http://example.com"})
+
+    assert response.status_code == 200
+    assert response.headers.get("access-control-allow-origin") == "*"

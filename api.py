@@ -3,15 +3,37 @@
 # ============================================================
 import os
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from openai import OpenAI
 from pydantic import BaseModel
 
 import config
+import knowledge
 from agent import run_agent
 from tools import add_knowledge, clear_knowledge, knowledge_info
 
 app = FastAPI(title=config.APP_TITLE, version="1.0.0")
+
+# 允许浏览器跨域调用。
+# 学生/演示项目先全放开；若正式对外，应把 allow_origins 收成具体域名白名单。
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+@app.middleware("http")
+async def bind_client(request: Request, call_next):
+    """把请求头里的客户端标识写入上下文。
+
+    工具函数 search_knowledge 拿不到请求信息，只能通过上下文读取，
+    这样不同客户端各自拥有独立的知识库。
+    """
+    knowledge.set_current_client(request.headers.get("X-Client-Id"))
+    return await call_next(request)
 
 SYSTEM_PROMPT = (
     "你是一个乐于助人的助手，可调用工具完成知识库检索、数学计算与时间查询。"

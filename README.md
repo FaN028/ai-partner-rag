@@ -17,6 +17,7 @@
 - **工具调用轨迹可见** —— 界面可折叠面板 + JSONL 结构化落盘，决策链路全程可复盘
 - **双对话模式** —— 侧边栏可切换「知识库模式」（每问必检索）与「Agent 模式」（按需调用）
 - **HTTP 接口服务** —— 以 FastAPI 暴露 `POST /chat`、`POST /knowledge` 等接口，同一套调度逻辑可供任意前端调用
+- **多客户端隔离与知识库持久化** —— 请求头 `X-Client-Id` 区分各自的知识库，数据落盘后服务重启自动恢复
 
 ## 🧠 核心流程
 
@@ -80,16 +81,17 @@
 
 ## 🛠 技术栈
 
-| 层        | 技术                       |
-|-----------|----------------------------|
-| 界面      | Streamlit                  |
-| 大模型    | DeepSeek API（OpenAI SDK） |
-| 工具调用  | DeepSeek Function Calling  |
-| Embedding | BAAI/bge-small-zh-v1.5     |
-| Rerank    | BAAI/bge-reranker-base     |
-| 相似度    | numpy（余弦相似度）        |
-| 轨迹落盘  | JSONL（追加式结构化日志）  |
-| 接口服务  | FastAPI + Uvicorn          |
+| 层           | 技术                          |
+|--------------|-------------------------------|
+| 界面         | Streamlit                     |
+| 大模型       | DeepSeek API（OpenAI SDK）    |
+| 工具调用     | DeepSeek Function Calling     |
+| Embedding    | BAAI/bge-small-zh-v1.5        |
+| Rerank       | BAAI/bge-reranker-base        |
+| 相似度       | numpy（余弦相似度）           |
+| 轨迹落盘     | JSONL（追加式结构化日志）     |
+| 接口服务     | FastAPI + Uvicorn             |
+| 知识库持久化 | numpy 向量落盘（.npy + JSON） |
 
 ## 📊 评测结果
 
@@ -148,7 +150,30 @@ curl -X POST http://127.0.0.1:8000/chat \
   -d '{"question": "帮我算一下 (1234+5678)*3"}'
 ```
 
-> 说明：HTTP 模式下知识库存于服务端进程内存（`tools.py` 的 `_KNOWLEDGE`），重启服务即清空；界面模式仍使用独立的会话状态。
+> 说明：HTTP 模式下每个客户端拥有独立的知识库，见下方「知识库隔离与持久化」。
+
+### 知识库隔离与持久化
+
+HTTP 模式下，不同客户端的知识库**互相隔离**，通过请求头 `X-Client-Id` 区分；不传则归入 `default`。
+
+数据落盘在 `data/knowledge/<client_id>/`（`chunks.json` + `sources.json` + `vectors.npy`），**服务重启后自动恢复，无需重新上传**。
+
+```bash
+# 以 alice 的身份上传资料
+curl -X POST http://127.0.0.1:8000/knowledge \
+  -H "Content-Type: application/json" \
+  -H "X-Client-Id: alice" \
+  -d '{"source": "员工手册.md", "content": "公司实行弹性工作制……"}'
+
+# 以 alice 的身份提问（会自动检索她自己的知识库）
+curl -X POST http://127.0.0.1:8000/chat \
+  -H "Content-Type: application/json" \
+  -H "X-Client-Id: alice" \
+  -d '{"question": "试用期多久？"}'
+```
+
+> ⚠️ `X-Client-Id` 只用于**数据分区**，不是鉴权手段——任何人都能伪造。若要正式对外提供服务，需另行接入登录与访问控制。
+> 界面模式（Streamlit）仍使用独立的会话状态，与上述服务端存储互不影响。
 
 ## ✅ 测试
 
@@ -156,13 +181,14 @@ curl -X POST http://127.0.0.1:8000/chat \
 pytest
 ```
 
-全部用例**不联网、不加载 embedding 模型**，约 4 秒跑完。
+全部用例**不联网、不加载 embedding 模型**，约 10 秒跑完。
 
-| 测试文件              | 覆盖内容                                                                                      |
-|-----------------------|-----------------------------------------------------------------------------------------------|
-| `tests/test_tools.py` | 四则运算、代码注入载荷拦截、异常兜底、工具名在两张表间的一致性、知识库存取                    |
-| `tests/test_agent.py` | 无工具直答、多轮工具调用、上下文消息顺序、未知工具、工具异常、`MAX_ROUNDS` 主动停止、轨迹落盘 |
-| `tests/test_api.py`   | `/health`；`/chat` 的正常分支与 422 / 502 / 503 错误分支；`/knowledge` 的增删查               |
+| 测试文件                  | 覆盖内容                                                                                          |
+|---------------------------|---------------------------------------------------------------------------------------------------|
+| `tests/test_tools.py`     | 四则运算、代码注入载荷拦截、异常兜底、工具名在两张表间的一致性、知识库存取                        |
+| `tests/test_agent.py`     | 无工具直答、多轮工具调用、上下文消息顺序、未知工具、工具异常、`MAX_ROUNDS` 主动停止、轨迹落盘     |
+| `tests/test_api.py`       | `/health`；`/chat` 的正常分支与 422 / 502 / 503 错误分支；`/knowledge` 增删查、跨客户端隔离、CORS |
+| `tests/test_knowledge.py` | 按客户端隔离、落盘后恢复、清空时删除磁盘文件、客户端标识的安全规范化                              |
 
 ## 🐳 Docker 运行（可选）
 
@@ -187,6 +213,8 @@ api.py（接口层）    chat()            → 校验请求 / 返回 JSON
 agent.py（逻辑层）  run_agent()       → 多轮循环 / 派发工具 / 两级兜底
                             ↓ 调用
 tools.py（工具层）  TOOLS / TOOL_SCHEMAS / 知识库来源
+                            ↓ 读取
+knowledge.py        KnowledgeBase     → 按客户端隔离 / 落盘持久化
 ```
 
 因为逻辑层不引用 Streamlit，所以同一套调度逻辑：
@@ -207,12 +235,15 @@ ai/
 ├── evaluate.py               # 评测脚本（对比三种检索的命中率）
 ├── agent.py                  # Agent 主循环（工具调度 + 轨迹落盘）
 ├── tools.py                  # Agent 工具：函数本体 + 注册表 + 声明表
+├── knowledge.py              # 服务端知识库：按客户端隔离 + 落盘持久化
 ├── download_model.py         # 下载 embedding 模型
 ├── download_reranker.py      # 下载 rerank 模型
 ├── tests/                    # 单元测试（pytest）
+│   ├── conftest.py           #   公共夹具（隔离落盘目录）
 │   ├── test_tools.py         #   工具行为 + 安全防护 + 注册表一致性
 │   ├── test_agent.py         #   调度循环 + 兜底路径 + 轨迹落盘
-│   └── test_api.py           #   HTTP 接口状态码与校验
+│   ├── test_api.py           #   HTTP 接口状态码、校验、跨客户端隔离
+│   └── test_knowledge.py     #   客户端隔离 + 落盘恢复
 ├── pytest.ini                # pytest 配置
 ├── Dockerfile                # 容器构建
 ├── .dockerignore
@@ -220,6 +251,7 @@ ai/
 ├── requirements.txt          # 依赖清单
 ├── models/                   # 模型文件（下载后生成）
 ├── sessions/                 # 会话记录（运行后生成）
+├── data/knowledge/           # 服务端知识库落盘数据（按客户端分目录，已 gitignore）
 ├── agent_trace.jsonl         # 工具调用轨迹（运行后生成，已 gitignore）
 └── resources/                # logo 图片
 ```
