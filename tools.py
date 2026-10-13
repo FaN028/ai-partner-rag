@@ -58,16 +58,17 @@ def search_knowledge(query: str) -> str:
 
     返回拼接后的原文片段；知识库为空或未命中时返回提示文本。
     """
+    # 先判断知识库是否为空：为空时直接返回，避免白白加载数百 MB 的检索模型。
+    chunks, vectors = _resolve_knowledge()
+    if not chunks or not vectors:
+        return "知识库中还没有内容。"
+
     # 延迟导入：rag 模块在导入时即加载 embedding 与 rerank 模型，
     # 置于模块顶层会使本文件无法脱离模型独立导入与测试。
     try:
         from rag import build_context_block
     except Exception:
         return "检索组件尚未就绪。"
-
-    chunks, vectors = _resolve_knowledge()
-    if not chunks or not vectors:
-        return "知识库中还没有内容。"
 
     _, selected = build_context_block(query, chunks, vectors)
     if not selected:

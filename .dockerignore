@@ -1,0 +1,24 @@
+# 构建镜像时排除以下内容：它们要么能重新生成，要么与运行无关
+.git/
+.gitignore
+.venv/
+.idea/
+.vscode/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# 模型文件：体积大，改由 Dockerfile 内下载或运行时挂载
+models/
+
+# 运行产物
+sessions/
+agent_trace.jsonl
+
+# 本地私人目录
+旧版本/
+笔记/
+
+# 容器内不需要的文档与产物
+.env
+求职材料/

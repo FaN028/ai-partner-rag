@@ -9,3 +9,7 @@ sentence-transformers  # embedding + rerank 模型
 pypdf                  # 解析 PDF 文档
 python-docx            # 解析 Word 文档
 modelscope             # 下载模型（国内镜像，只需下载时用）
+
+# —— 开发与测试 ——
+pytest                 # 运行 tests/ 下的单元测试
+httpx                  # FastAPI TestClient 依赖

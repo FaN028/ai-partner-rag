@@ -104,15 +104,17 @@
 ## 🚀 安装与运行
 
 ```bash
-# 1. 安装依赖
+# 1. 安装依赖（sentence-transformers 会一并安装 PyTorch，体积较大，请耐心等待）
 pip install -r requirements.txt
 
-# 2. 下载模型（走国内 ModelScope 镜像）
+# 2. 下载模型（走国内 ModelScope 镜像，合计约 500MB）
 python download_model.py       # 下载 embedding 模型
 python download_reranker.py    # 下载 rerank 模型
 
 # 3. 配置 DeepSeek API Key（环境变量）
-#    Windows: set DEEPSEEK_API_KEY=你的key
+#    Windows:  set DEEPSEEK_API_KEY=你的key
+#    其他系统: export DEEPSEEK_API_KEY=你的key
+#    变量名可参考 .env.example
 
 # 4. 运行 Web 界面
 streamlit run app.py
@@ -148,6 +150,32 @@ curl -X POST http://127.0.0.1:8000/chat \
 
 > 说明：HTTP 模式下知识库存于服务端进程内存（`tools.py` 的 `_KNOWLEDGE`），重启服务即清空；界面模式仍使用独立的会话状态。
 
+## ✅ 测试
+
+```bash
+pytest
+```
+
+全部用例**不联网、不加载 embedding 模型**，约 4 秒跑完。
+
+| 测试文件              | 覆盖内容                                                                                      |
+|-----------------------|-----------------------------------------------------------------------------------------------|
+| `tests/test_tools.py` | 四则运算、代码注入载荷拦截、异常兜底、工具名在两张表间的一致性、知识库存取                    |
+| `tests/test_agent.py` | 无工具直答、多轮工具调用、上下文消息顺序、未知工具、工具异常、`MAX_ROUNDS` 主动停止、轨迹落盘 |
+| `tests/test_api.py`   | `/health`；`/chat` 的正常分支与 422 / 502 / 503 错误分支；`/knowledge` 的增删查               |
+
+## 🐳 Docker 运行（可选）
+
+```bash
+cp .env.example .env          # 填入 DEEPSEEK_API_KEY
+docker build -t rag-agent .
+docker run --rm -p 8000:8000 --env-file .env rag-agent
+```
+
+首次构建需安装依赖并下载约 500MB 模型，耗时较长。若本地已有 `models/`，可加 `--build-arg DOWNLOAD_MODELS=false` 跳过下载，改用 `-v "$(pwd)/models:/app/models"` 挂载。
+
+> 注：Docker 配置为最近补充，尚未在作者本机完成整轮构建验证。
+
 ## 🧩 架构分层
 
 调度逻辑层（`agent.py`）**不依赖任何界面框架**：
@@ -181,6 +209,14 @@ ai/
 ├── tools.py                  # Agent 工具：函数本体 + 注册表 + 声明表
 ├── download_model.py         # 下载 embedding 模型
 ├── download_reranker.py      # 下载 rerank 模型
+├── tests/                    # 单元测试（pytest）
+│   ├── test_tools.py         #   工具行为 + 安全防护 + 注册表一致性
+│   ├── test_agent.py         #   调度循环 + 兜底路径 + 轨迹落盘
+│   └── test_api.py           #   HTTP 接口状态码与校验
+├── pytest.ini                # pytest 配置
+├── Dockerfile                # 容器构建
+├── .dockerignore
+├── .env.example              # 环境变量模板
 ├── requirements.txt          # 依赖清单
 ├── models/                   # 模型文件（下载后生成）
 ├── sessions/                 # 会话记录（运行后生成）
