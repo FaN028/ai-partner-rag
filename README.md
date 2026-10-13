@@ -21,7 +21,11 @@
 
 ## 🎬 效果演示
 
-以下是一次真实运行的记录，终端输出原样粘贴。
+![Agent 模式运行演示](resources/demo.gif)
+
+上图为真实运行过程：切到「Agent 模式」后提问，模型自行判断需要工具，先后调用 `get_current_time` 与 `calculate`，回答下方同步给出可展开的工具调用轨迹。
+
+下面再用终端记录展示接口层的完整行为，输出原样粘贴。
 
 **① 上传一份资料（以 alice 的身份）**
 
@@ -139,7 +143,9 @@ curl http://127.0.0.1:8000/knowledge -H "X-Client-Id: alice"
 
 ## 📈 可观测性
 
-每次工具调用都会结构化为一行 JSON 追加写入 `agent_trace.jsonl`（轮次 / 工具名 / 参数 / 结果），并在界面回答下方的可折叠面板中实时展示。
+![界面上的工具调用轨迹面板](resources/screenshot-agent-trace.png)
+
+每次工具调用都会结构化为一行 JSON 追加写入 `agent_trace.jsonl`（轮次 / 工具名 / 参数 / 结果），并在界面回答下方的可折叠面板中实时展示（见上图）。
 
 ```jsonl
 {"time": "2026-10-12 00:39:09", "question": "现在几点了？顺便帮我算一下 (1234+5678)*3 等于多少。", "round": 1, "tool": "get_current_time", "args": {}, "result": "2026-10-12 00:39:08"}
@@ -324,5 +330,5 @@ ai/
 ├── sessions/                 # 会话记录（运行后生成）
 ├── data/knowledge/           # 服务端知识库落盘数据（按客户端分目录，已 gitignore）
 ├── agent_trace.jsonl         # 工具调用轨迹（运行后生成，已 gitignore）
-└── resources/                # logo 图片
+└── resources/                # logo 与演示图（demo.gif、screenshot-agent-trace.png）
 ```
