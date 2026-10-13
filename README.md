@@ -19,6 +19,75 @@
 - **HTTP 接口服务** —— 以 FastAPI 暴露 `POST /chat`、`POST /knowledge` 等接口，同一套调度逻辑可供任意前端调用
 - **多客户端隔离与知识库持久化** —— 请求头 `X-Client-Id` 区分各自的知识库，数据落盘后服务重启自动恢复
 
+## 🎬 效果演示
+
+以下是一次真实运行的记录，终端输出原样粘贴。
+
+**① 上传一份资料（以 alice 的身份）**
+
+```bash
+curl -X POST http://127.0.0.1:8000/knowledge \
+  -H "Content-Type: application/json" \
+  -H "X-Client-Id: alice" \
+  -d '{"source": "员工手册.md", "content": "公司实行弹性工作制，核心工作时间为上午 10 点到下午 4 点。员工每年享有 5 天全薪病假。试用期为 3 个月，试用期内提前 3 天申请即可离职。"}'
+```
+
+```json
+{"sources": ["员工手册.md"], "chunks": 1}
+```
+
+**② 提问——模型自行判断需要检索，并一次拆成两个子查询**
+
+```bash
+curl -X POST http://127.0.0.1:8000/chat \
+  -H "Content-Type: application/json" \
+  -H "X-Client-Id: alice" \
+  -d '{"question": "试用期多久？核心工作时间是什么时候？"}'
+```
+
+```json
+{
+  "answer": "根据知识库中的资料：\n\n- **试用期**：3 个月。试用期内提前 3 天申请即可离职。\n- **核心工作时间**：上午 10 点到下午 4 点（公司实行弹性工作制）。",
+  "trace": [
+    {
+      "round": 1,
+      "tool": "search_knowledge",
+      "args": { "query": "试用期多久" },
+      "result": "【片段 1】\n公司实行弹性工作制，核心工作时间为上午 10 点到下午 4 点。员工每年享有 5 天全薪病假。试用期为 3 个月，试用期内提前 3 天申请即可离职。"
+    },
+    {
+      "round": 1,
+      "tool": "search_knowledge",
+      "args": { "query": "核心工作时间" },
+      "result": "【片段 1】\n公司实行弹性工作制，核心工作时间为上午 10 点到下午 4 点。员工每年享有 5 天全薪病假。试用期为 3 个月，试用期内提前 3 天申请即可离职。"
+    }
+  ]
+}
+```
+
+**③ 换个客户端，看不到 alice 的资料（隔离生效）**
+
+```bash
+curl http://127.0.0.1:8000/knowledge -H "X-Client-Id: bob"
+```
+
+```json
+{"sources": [], "chunks": 0}
+```
+
+**④ 重启服务后，alice 的资料依然在，且无需重新上传即可直接提问（持久化生效）**
+
+```bash
+# 重启 uvicorn 之后
+curl http://127.0.0.1:8000/knowledge -H "X-Client-Id: alice"
+```
+
+```json
+{"sources": ["员工手册.md"], "chunks": 1}
+```
+
+> Web 界面下，每次工具调用会以可折叠面板的形式显示在回答下方（`🔧 工具调用轨迹（N 次）`），面板内含轮次、工具名、参数与返回原文，与上面 `trace` 字段一一对应。
+
 ## 🧠 核心流程
 
 ### ① RAG 检索链路（知识库模式）
@@ -141,6 +210,8 @@ uvicorn api:app --host 127.0.0.1 --port 8000
 | `POST`   | `/knowledge` | 上传文本资料，切块向量化后加入服务端知识库  |
 | `GET`    | `/knowledge` | 查看知识库当前状态                          |
 | `DELETE` | `/knowledge` | 清空知识库                                  |
+
+> 注：`/docs` 页面默认从 jsdelivr CDN 加载 Swagger UI 的静态资源。若所在网络访问不了该 CDN，页面会呈现空白——此时改用 `/redoc`，或把静态资源下载到本地自托管后调整 `docs_url`。
 
 调用示例：
 
