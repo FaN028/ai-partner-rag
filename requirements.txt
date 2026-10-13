@@ -2,6 +2,8 @@
 # 在项目目录执行：pip install -r requirements.txt
 streamlit              # 网页界面
 openai                 # 调用 DeepSeek API
+fastapi                # HTTP 接口服务
+uvicorn                # 运行 FastAPI 的 ASGI 服务器
 numpy                  # 向量数学计算
 sentence-transformers  # embedding + rerank 模型
 pypdf                  # 解析 PDF 文档

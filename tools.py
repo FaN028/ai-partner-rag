@@ -4,25 +4,70 @@
 import re
 from datetime import datetime
 
+# ============================================================
+# 知识库来源：界面模式读 Streamlit 会话，HTTP 模式读以下进程级存储
+# ============================================================
+_KNOWLEDGE: dict[str, list] = {"chunks": [], "vectors": [], "sources": []}
+
+
+def add_knowledge(chunks: list, vectors, source: str = "") -> int:
+    """向服务端知识库追加片段与向量，返回追加后的片段总数。"""
+    _KNOWLEDGE["chunks"].extend(chunks)
+    _KNOWLEDGE["vectors"].extend(vectors)
+    if source:
+        _KNOWLEDGE["sources"].append(source)
+    return len(_KNOWLEDGE["chunks"])
+
+
+def clear_knowledge() -> None:
+    """清空服务端知识库。"""
+    _KNOWLEDGE["chunks"].clear()
+    _KNOWLEDGE["vectors"].clear()
+    _KNOWLEDGE["sources"].clear()
+
+
+def knowledge_info() -> dict:
+    """返回服务端知识库的当前状态。"""
+    return {
+        "sources": list(_KNOWLEDGE["sources"]),
+        "chunks": len(_KNOWLEDGE["chunks"]),
+    }
+
+
+def _resolve_knowledge():
+    """取当前可用的知识库 (chunks, vectors)。
+
+    优先读取 Streamlit 会话状态（界面模式）；无可用会话状态时，
+    回退到服务端共享知识库（HTTP 模式）。
+    """
+    try:
+        import streamlit as st
+
+        chunks = st.session_state.knowledge_chunks
+        vectors = st.session_state.knowledge_vectors
+        if len(chunks) > 0 and len(vectors) > 0:
+            return chunks, vectors
+    except Exception:
+        pass
+
+    return _KNOWLEDGE["chunks"], _KNOWLEDGE["vectors"]
+
 
 def search_knowledge(query: str) -> str:
     """在私有知识库中检索与 query 相关的原文片段。
 
-    返回拼接后的原文片段；知识库未加载或未命中时返回提示文本。
+    返回拼接后的原文片段；知识库为空或未命中时返回提示文本。
     """
-    # 延迟导入：rag 模块在导入时即加载 embedding 模型，
+    # 延迟导入：rag 模块在导入时即加载 embedding 与 rerank 模型，
     # 置于模块顶层会使本文件无法脱离模型独立导入与测试。
     try:
-        import streamlit as st
         from rag import build_context_block
-
-        chunks = st.session_state.knowledge_chunks
-        vectors = st.session_state.knowledge_vectors
     except Exception:
-        return "知识库尚未加载，请先在界面上传资料。"
+        return "检索组件尚未就绪。"
 
+    chunks, vectors = _resolve_knowledge()
     if not chunks or not vectors:
-        return "知识库中没有找到相关内容。"
+        return "知识库中还没有内容。"
 
     _, selected = build_context_block(query, chunks, vectors)
     if not selected:

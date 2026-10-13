@@ -16,6 +16,7 @@
 - **Agent 工具调用** —— 模型自主决定调不调工具、调哪个，支持一次提问并行调用多个工具
 - **工具调用轨迹可见** —— 界面可折叠面板 + JSONL 结构化落盘，决策链路全程可复盘
 - **双对话模式** —— 侧边栏可切换「知识库模式」（每问必检索）与「Agent 模式」（按需调用）
+- **HTTP 接口服务** —— 以 FastAPI 暴露 `POST /chat`、`POST /knowledge` 等接口，同一套调度逻辑可供任意前端调用
 
 ## 🧠 核心流程
 
@@ -88,6 +89,7 @@
 | Rerank    | BAAI/bge-reranker-base     |
 | 相似度    | numpy（余弦相似度）        |
 | 轨迹落盘  | JSONL（追加式结构化日志）  |
+| 接口服务  | FastAPI + Uvicorn          |
 
 ## 📊 评测结果
 
@@ -112,8 +114,11 @@ python download_reranker.py    # 下载 rerank 模型
 # 3. 配置 DeepSeek API Key（环境变量）
 #    Windows: set DEEPSEEK_API_KEY=你的key
 
-# 4. 运行
+# 4. 运行 Web 界面
 streamlit run app.py
+
+# 5. 或运行 HTTP 接口服务（FastAPI）
+uvicorn api:app --host 127.0.0.1 --port 8000
 ```
 
 运行后在侧边栏「对话模式」中切换：
@@ -121,22 +126,45 @@ streamlit run app.py
 - **知识库模式** —— 每次提问都先检索知识库（原有行为）
 - **Agent 模式** —— 模型自己判断要不要检索、要不要算数、要不要看时间
 
+### HTTP 接口
+
+`uvicorn` 启动后访问 `http://127.0.0.1:8000/docs` 可打开自动生成的交互式 API 文档，直接在页面上调用接口。
+
+| 方法     | 路径         | 说明                                        |
+|----------|--------------|---------------------------------------------|
+| `GET`    | `/health`    | 健康检查                                    |
+| `POST`   | `/chat`      | 执行一轮 Agent 调度，返回答复与工具调用轨迹 |
+| `POST`   | `/knowledge` | 上传文本资料，切块向量化后加入服务端知识库  |
+| `GET`    | `/knowledge` | 查看知识库当前状态                          |
+| `DELETE` | `/knowledge` | 清空知识库                                  |
+
+调用示例：
+
+```bash
+curl -X POST http://127.0.0.1:8000/chat \
+  -H "Content-Type: application/json" \
+  -d '{"question": "帮我算一下 (1234+5678)*3"}'
+```
+
+> 说明：HTTP 模式下知识库存于服务端进程内存（`tools.py` 的 `_KNOWLEDGE`），重启服务即清空；界面模式仍使用独立的会话状态。
+
 ## 🧩 架构分层
 
 调度逻辑层（`agent.py`）**不依赖任何界面框架**：
 
 ```
-app.py（界面层）   run_agent_turn()  → 画回答 / 存会话 / 落盘 / 渲染面板
-                        ↓ 调用
-agent.py（逻辑层） run_agent()       → 多轮循环 / 派发工具 / 两级兜底
-                        ↓ 调用
-tools.py（工具层） TOOLS / TOOL_SCHEMAS
+app.py（界面层）    run_agent_turn()  → 渲染回答 / 存会话 / 落盘 / 轨迹面板
+api.py（接口层）    chat()            → 校验请求 / 返回 JSON
+                            ↓ 两者调用同一个函数
+agent.py（逻辑层）  run_agent()       → 多轮循环 / 派发工具 / 两级兜底
+                            ↓ 调用
+tools.py（工具层）  TOOLS / TOOL_SCHEMAS / 知识库来源
 ```
 
 因为逻辑层不引用 Streamlit，所以同一套调度逻辑：
 
 - 可在终端直接单元测试（无需启动界面）
-- 可被其他前端或 HTTP 服务复用（零改造成本）
+- 已被 Streamlit 界面与 FastAPI 接口同时复用，接入时未改动 `agent.py` 一行
 
 ## 📁 目录结构
 
@@ -147,6 +175,7 @@ ai/
 ├── session.py                # 会话管理
 ├── rag.py                    # RAG：模型加载 + 切块 + 检索 + 注入
 ├── ui.py                     # 界面（聊天记录、知识库面板、侧边栏）
+├── api.py                    # FastAPI 服务：HTTP 接口（/chat、/knowledge）
 ├── evaluate.py               # 评测脚本（对比三种检索的命中率）
 ├── agent.py                  # Agent 主循环（工具调度 + 轨迹落盘）
 ├── tools.py                  # Agent 工具：函数本体 + 注册表 + 声明表
