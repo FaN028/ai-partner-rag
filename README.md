@@ -311,11 +311,7 @@ python benchmark_vector.py --chunks 5000 --queries 200
 
 ## 🐳 部署
 
-> 没有服务器也能上线：内网穿透（10 分钟、0 成本）、魔搭创空间（免费、长期固定链接）、自备云主机（长期自主）三条路线的完整步骤与排错清单，见 **[deploy/部署指南.md](deploy/部署指南.md)**。
-> 给平台的镜像在 `deploy/Dockerfile.space`（Streamlit + 7860 端口 + 关掉 iframe 限制）。
-
 ### 一条命令拉起（API + Web 界面）
-
 ```bash
 cp .env.example .env              # 填入 DEEPSEEK_API_KEY
 docker compose up -d --build
@@ -396,10 +392,6 @@ ai/
 ├── pytest.ini                # pytest 配置
 ├── Dockerfile                # 容器构建（两阶段、非 root、健康检查）
 ├── docker-compose.yml        # API + Web 界面一键启动
-├── deploy/                   # 上线相关
-│   ├── 部署指南.md           #   三条路线：内网穿透 / 创空间 / 云主机
-│   ├── Dockerfile.space      #   给平台用的镜像（Streamlit + 7860）
-│   └── space-README.md       #   Space 仓库的 README（含平台 frontmatter）
 ├── .dockerignore
 ├── .env.example              # 环境变量模板
 ├── requirements.txt          # 依赖清单
