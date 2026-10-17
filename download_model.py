@@ -1,15 +1,11 @@
 # -*- coding: utf-8 -*-
-# 下载中文 embedding 模型 bge-small-zh-v1.5
+# 下载中文 embedding 模型 bge-small-zh-v1.5。
 #
-# 为什么走 ModelScope（魔搭）而不是 HuggingFace？
-#   国内直接下载 HuggingFace 会被墙，ModelScope 是阿里的国内镜像，速度快。
+# 走 ModelScope（阿里）镜像而非 HuggingFace：国内网络直连 HuggingFace 不可达。
+# 产物目录 models/bge-small-zh-v1.5/ 与 config.MODEL_PATH 一致，rag.py 直接加载。
 #
-# 用法（在项目目录下执行）：
-#   1. pip install modelscope        （装一次下载工具）
-#   2. python download_model.py       （运行本脚本，自动下载模型到 models/ 文件夹）
-#
-# 下载完成后，你的项目里会有 models/bge-small-zh-v1.5 这个文件夹，
-# 里面就是 embedding 模型，rag.py 会自动从那里加载。
+# 前置：pip install modelscope
+# 执行：python download_model.py
 
 from modelscope import snapshot_download
 

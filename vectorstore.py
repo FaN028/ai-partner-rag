@@ -1,20 +1,17 @@
 # ============================================================
 # vectorstore.py —— 向量存储抽象层：Chroma / NumPy 双后端
 # ============================================================
-"""为什么要有这一层？
+"""向量存储抽象层。
 
-早期实现把「片段 + 向量」直接塞进 Python 列表，每次检索都对全量向量做
-一遍余弦扫描（O(N)）。数据量小的时候没问题，片段上千后单次检索就开始
-肉眼可见地变慢，而且重启只能靠 .npy 全量读回内存。
+统一 add / query / count / clear / persist / load 六个方法，提供两个后端：
 
-这里把「存」和「查」抽成一组统一方法，交给两个实现：
+- NumpyVectorStore  —— 全量余弦扫描，O(N)，零外部依赖。默认后端，
+                       单元测试与单机演示无需安装数据库。
+- ChromaVectorStore —— Chroma 持久化 + HNSW 近似最近邻，生产用，
+                       由 RAG_VECTOR_BACKEND=chroma 启用。
 
-- NumpyVectorStore  —— 纯 NumPy 全量扫描，零外部依赖。默认后端，
-                       单元测试与单机演示都不需要装数据库。
-- ChromaVectorStore —— Chroma 持久化 + HNSW 近似最近邻，生产用。
-                       通过环境变量 RAG_VECTOR_BACKEND=chroma 打开。
-
-上层（knowledge.KnowledgeBase）只依赖这组方法，换后端不改调用方。
+选型依据：全量扫描在万级片段时单次查询进入数十毫秒，HNSW 可降到个位数。
+上层 knowledge.KnowledgeBase 只依赖这组方法，切换后端不影响调用方。
 """
 from __future__ import annotations
 

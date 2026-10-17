@@ -136,9 +136,9 @@ def main() -> None:
     print("=" * 50)
     print("测试题数：", len(TESTS), "，每次检索 Top", TOP_K)
     print("=" * 50)
-    print(f"① 关键词检索   命中率：{hit_rate(keyword_retrieve):.0%}")
-    print(f"② 向量检索     命中率：{hit_rate(vector_retrieve):.0%}")
-    print(f"③ 向量 + rerank 命中率：{hit_rate(rerank_retrieve):.0%}")
+    print(f"1) 关键词检索   命中率：{hit_rate(keyword_retrieve):.0%}")
+    print(f"2) 向量检索     命中率：{hit_rate(vector_retrieve):.0%}")
+    print(f"3) 向量 + rerank 命中率：{hit_rate(rerank_retrieve):.0%}")
 
 
 if __name__ == "__main__":
