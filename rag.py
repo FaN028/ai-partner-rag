@@ -25,7 +25,21 @@ def load_reranker():
 
 
 model = load_model()
-reranker = load_reranker()
+
+# rerank 模型常驻内存约 1.5GB，低配机器（如 2G 内存的云主机）会被它压垮。
+# 因此改成按需加载，并允许用 RAG_RERANK=0 整体关掉——关掉后只做向量粗排，
+# 精度略降但内存占用直接少一半。
+_reranker = None
+
+
+def get_reranker():
+    """取 rerank 模型；未启用时返回 None。"""
+    global _reranker
+    if not config.RERANK_ENABLED:
+        return None
+    if _reranker is None:
+        _reranker = load_reranker()
+    return _reranker
 
 
 def chunk_text(text: str, chunk_size: int = config.CHUNK_SIZE, overlap: int = config.CHUNK_OVERLAP) -> list[str]:
@@ -94,33 +108,63 @@ def cosine_similarity(a, b) -> float:
     return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
 
 
-def retrieve_chunks(query: str, chunks: list[str], vectors, top_k: int = config.TOP_K) -> list[str]:
-    """两阶段检索：先向量粗排筛出候选，再用 rerank 精排取 top_k。"""
-    if not chunks or not vectors:
+def retrieve_chunks(
+    query: str,
+    chunks: list[str] | None = None,
+    vectors=None,
+    top_k: int | None = None,
+    searcher=None,
+) -> list[str]:
+    """两阶段检索：先向量粗排筛出候选，再用 rerank 精排取 top_k。
+
+    粗排有两条路：
+    - 传入 searcher(query_vector, limit) 时，交给向量存储后端（可能是
+      Chroma 的 HNSW 索引）处理，此时无需把全量片段搬进内存；
+    - 不传 searcher 时，退化为对 chunks / vectors 的全量余弦扫描。
+
+    这样界面模式（数据就在 session_state 里）与服务端模式（数据在向量库）
+    共用同一段精排与拼装逻辑。
+    """
+    if top_k is None:
+        top_k = config.TOP_K
+
+    q_vec = model.encode(query)
+
+    if searcher is not None:
+        candidates = list(searcher(q_vec, config.RERANK_TOP_N))
+    else:
+        if chunks is None or vectors is None or not len(chunks) or not len(vectors):
+            return []
+        scored = []
+        for idx, chunk in enumerate(chunks):
+            score = cosine_similarity(q_vec, vectors[idx])
+            scored.append((score, idx, chunk))
+        scored.sort(key=lambda item: (-item[0], item[1]))
+        candidates = [chunk for _, _, chunk in scored[:config.RERANK_TOP_N]]
+
+    if not candidates:
         return []
 
-    # ① 粗排：向量检索，先筛出前 RERANK_TOP_N 个候选
-    q_vec = model.encode(query)
-    scored = []
-    for idx, chunk in enumerate(chunks):
-        score = cosine_similarity(q_vec, vectors[idx])
-        scored.append((score, idx, chunk))
+    # 精排：rerank 对候选重新打分；未启用 rerank 时直接取粗排前 top_k
+    ranker = get_reranker()
+    if ranker is None:
+        return candidates[:top_k]
 
-    scored.sort(key=lambda item: (-item[0], item[1]))
-    candidates = scored[:config.RERANK_TOP_N]
+    pairs = [[query, chunk] for chunk in candidates]
+    rerank_scores = ranker.predict(pairs)
 
-    # ② 精排：rerank 对候选重新打分
-    candidate_chunks = [chunk for _, _, chunk in candidates]
-    pairs = [[query, chunk] for chunk in candidate_chunks]
-    rerank_scores = reranker.predict(pairs)
-
-    ranked = sorted(zip(candidate_chunks, rerank_scores), key=lambda item: -item[1])
+    ranked = sorted(zip(candidates, rerank_scores), key=lambda item: -item[1])
     return [chunk for chunk, _ in ranked[:top_k]]
 
 
-def build_context_block(query: str, chunks: list[str], vectors):
+def build_context_block(
+    query: str,
+    chunks: list[str] | None = None,
+    vectors=None,
+    searcher=None,
+):
     """检索并拼出知识库上下文，同时返回命中的片段（用于显示引用来源）。"""
-    selected = retrieve_chunks(query, chunks, vectors)
+    selected = retrieve_chunks(query, chunks, vectors, searcher=searcher)
     if not selected:
         return "", []
 

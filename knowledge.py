@@ -1,14 +1,12 @@
 # ============================================================
-# knowledge.py —— 服务端知识库：按客户端隔离 + 落盘持久化
+# knowledge.py —— 服务端知识库：按客户端隔离 + 后端可切换的持久化
 # ============================================================
 import contextvars
-import json
 import re
 from pathlib import Path
 
-import numpy as np
-
 import config
+import vectorstore
 
 # 当前请求所属的客户端标识。
 # 工具函数（search_knowledge）无法从模型那里拿到客户端信息，
@@ -37,89 +35,85 @@ def current_client() -> str:
 
 
 class KnowledgeBase:
-    """单个客户端的知识库：片段、向量与来源清单，并支持落盘与恢复。"""
+    """单个客户端的知识库。
+
+    只负责「按客户端隔离」这一层语义，真正的存取与检索交给
+    vectorstore 里的后端（NumPy 全量扫描 / Chroma HNSW），
+    因此换后端不会牵动这里的任何一行调用代码。
+    """
 
     def __init__(self, client_id: str) -> None:
         self.client_id = client_id
-        self.chunks: list[str] = []
-        self.vectors: list = []
-        self.sources: list[str] = []
+        # 懒加载：第一次真正用到时才建后端（Chroma 会开连接，代价不为零）
+        self._store = None
 
-    # ---------------- 目录 ----------------
+    # ---------------- 目录与后端 ----------------
 
     @property
     def directory(self) -> Path:
         return config.KNOWLEDGE_DIR / self.client_id
 
-    # ---------------- 增删查 ----------------
+    @property
+    def store(self):
+        """按客户端隔离的向量存储实例。"""
+        if self._store is None:
+            self._store = vectorstore.build_store(self.client_id, self.directory)
+        return self._store
+
+    @property
+    def backend(self) -> str:
+        """当前后端名称：numpy / chroma（便于健康检查与日志）。"""
+        return self.store.backend
+
+    # ---------------- 只读视图 ----------------
+
+    @property
+    def chunks(self) -> list[str]:
+        return self.store.chunks()
+
+    @property
+    def vectors(self) -> list:
+        return self.store.vectors()
+
+    @property
+    def sources(self) -> list[str]:
+        return self.store.sources()
 
     @property
     def ready(self) -> bool:
         """是否已有可检索的内容。"""
-        return len(self.chunks) > 0 and len(self.vectors) > 0
+        return self.store.count() > 0
+
+    def info(self) -> dict:
+        return {"sources": self.sources, "chunks": self.store.count()}
+
+    def count(self) -> int:
+        """当前片段总数（健康检查与统计用）。"""
+        return self.store.count()
+
+    # ---------------- 增删查 ----------------
 
     def add(self, chunks: list[str], vectors, source: str = "") -> int:
         """追加片段与向量，返回追加后的片段总数。"""
-        self.chunks.extend(chunks)
-        self.vectors.extend(vectors)
-        if source and source not in self.sources:
-            self.sources.append(source)
-        return len(self.chunks)
+        return self.store.add(chunks, vectors, source)
+
+    def search(self, query_vector, limit: int) -> list[str]:
+        """按向量相似度取候选片段，供上层 rerank 精排。"""
+        return self.store.query(query_vector, limit)
 
     def clear(self) -> None:
-        """清空内存中的数据，并删除已落盘的文件。"""
-        self.chunks.clear()
-        self.vectors.clear()
-        self.sources.clear()
-        if self.directory.exists():
-            for file in self.directory.iterdir():
-                if file.is_file():
-                    file.unlink()
-
-    def info(self) -> dict:
-        return {"sources": list(self.sources), "chunks": len(self.chunks)}
+        """清空该客户端的知识库（含已落盘数据）。"""
+        self.store.clear()
 
     # ---------------- 持久化 ----------------
 
     def save(self) -> None:
-        """把片段、来源与向量写入磁盘。"""
-        self.directory.mkdir(parents=True, exist_ok=True)
-        (self.directory / "chunks.json").write_text(
-            json.dumps(self.chunks, ensure_ascii=False),
-            encoding="utf-8",
-        )
-        (self.directory / "sources.json").write_text(
-            json.dumps(self.sources, ensure_ascii=False),
-            encoding="utf-8",
-        )
-        np.save(self.directory / "vectors.npy", np.asarray(self.vectors, dtype="float32"))
+        """落盘；Chroma 后端自身持久化，这里只保证接口一致。"""
+        self.store.persist()
 
     def load(self) -> bool:
-        """从磁盘恢复；数据不存在或已损坏时返回 False。"""
-        chunks_file = self.directory / "chunks.json"
-        vectors_file = self.directory / "vectors.npy"
-        if not chunks_file.exists() or not vectors_file.exists():
-            return False
-
-        try:
-            chunks = json.loads(chunks_file.read_text(encoding="utf-8"))
-            vectors = list(np.load(vectors_file))
-            sources_file = self.directory / "sources.json"
-            sources = (
-                json.loads(sources_file.read_text(encoding="utf-8"))
-                if sources_file.exists()
-                else []
-            )
-        except (OSError, ValueError):
-            return False
-
-        if len(chunks) != len(vectors):
-            return False
-
-        self.chunks = chunks
-        self.vectors = vectors
-        self.sources = sources
-        return True
+        """从磁盘恢复；无数据或已损坏时返回 False。"""
+        return self.store.load()
 
 
 # ---------------- 客户端 → 知识库 的注册表 ----------------

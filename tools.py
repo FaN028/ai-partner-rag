@@ -29,10 +29,11 @@ def knowledge_info() -> dict:
 
 
 def _resolve_knowledge():
-    """取当前可用的知识库 (chunks, vectors)。
+    """取当前可用的知识库视图：(chunks, vectors, searcher)。
 
-    优先读取 Streamlit 会话状态（界面模式）；无可用会话状态时，
-    回退到服务端存储（HTTP 模式）。
+    - 界面模式：数据在 Streamlit 会话状态里，直接返回 (chunks, vectors, None)；
+    - 服务端模式：数据在向量库后端里，只交出 searcher，避免把全量片段与
+      向量搬进内存——这正是换成 Chroma 后端后省掉的那部分开销。
     """
     try:
         import streamlit as st
@@ -40,12 +41,14 @@ def _resolve_knowledge():
         chunks = st.session_state.knowledge_chunks
         vectors = st.session_state.knowledge_vectors
         if len(chunks) > 0 and len(vectors) > 0:
-            return chunks, vectors
+            return chunks, vectors, None
     except Exception:
         pass
 
     store = knowledge.get_store()
-    return store.chunks, store.vectors
+    if not store.ready:
+        return None, None, None
+    return None, None, store.search
 
 
 def search_knowledge(query: str) -> str:
@@ -53,9 +56,9 @@ def search_knowledge(query: str) -> str:
 
     返回拼接后的原文片段；知识库为空或未命中时返回提示文本。
     """
+    chunks, vectors, searcher = _resolve_knowledge()
     # 先判断知识库是否为空：为空时直接返回，避免白白加载数百 MB 的检索模型。
-    chunks, vectors = _resolve_knowledge()
-    if not chunks or not vectors:
+    if searcher is None and (not chunks or not vectors):
         return "知识库中还没有内容。"
 
     # 延迟导入：rag 模块在导入时即加载 embedding 与 rerank 模型，
@@ -65,7 +68,7 @@ def search_knowledge(query: str) -> str:
     except Exception:
         return "检索组件尚未就绪。"
 
-    _, selected = build_context_block(query, chunks, vectors)
+    _, selected = build_context_block(query, chunks, vectors, searcher=searcher)
     if not selected:
         return "知识库中没有找到相关内容。"
 

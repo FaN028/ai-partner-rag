@@ -88,8 +88,18 @@ class KnowledgeResponse(BaseModel):
 
 @app.get("/health")
 def health() -> dict:
-    """健康检查：确认服务存活及其绑定的模型。"""
-    return {"status": "ok", "model": config.MODEL_NAME}
+    """健康检查：确认服务存活、绑定的模型与向量后端。
+
+    容器编排可用它判断实例是否就绪；同时把后端类型暴露出来，
+    避免「以为在用 Chroma、实际退回了 NumPy」这类静默降级。
+    """
+    store = knowledge.get_store()
+    return {
+        "status": "ok",
+        "model": config.MODEL_NAME,
+        "vector_backend": store.backend,
+        "chunks": store.count(),
+    }
 
 
 @app.post("/chat", response_model=ChatResponse)
