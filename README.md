@@ -18,6 +18,8 @@
 - **双对话模式** —— 侧边栏可切换「知识库模式」（每问必检索）与「Agent 模式」（按需调用）
 - **HTTP 接口服务** —— 以 FastAPI 暴露 `POST /chat`、`POST /knowledge` 等接口，同一套调度逻辑可供任意前端调用
 - **多客户端隔离与知识库持久化** —— 请求头 `X-Client-Id` 区分各自的知识库，数据落盘后服务重启自动恢复
+- **向量存储可切换** —— 一套接口两种后端：Chroma（HNSW 近似最近邻 + 持久化）/ NumPy（全量扫描，零依赖降级），换后端不动调用方代码
+- **容器化部署** —— 两阶段构建、非 root 运行、`/health` 就绪探针、`docker compose` 一条命令拉起 API 与界面
 
 ## 🎬 效果演示
 
@@ -163,10 +165,11 @@ curl http://127.0.0.1:8000/knowledge -H "X-Client-Id: alice"
 | 工具调用     | DeepSeek Function Calling     |
 | Embedding    | BAAI/bge-small-zh-v1.5        |
 | Rerank       | BAAI/bge-reranker-base        |
-| 相似度       | numpy（余弦相似度）           |
+| 相似度       | numpy（余弦相似度）/ Chroma（HNSW） |
 | 轨迹落盘     | JSONL（追加式结构化日志）     |
 | 接口服务     | FastAPI + Uvicorn             |
-| 知识库持久化 | numpy 向量落盘（.npy + JSON） |
+| 知识库持久化 | Chroma 向量库 / numpy 向量落盘（.npy + JSON） |
+| 部署         | Docker 多阶段构建 + docker compose |
 
 ## 📊 评测结果
 
@@ -266,18 +269,82 @@ pytest
 | `tests/test_agent.py`     | 无工具直答、多轮工具调用、上下文消息顺序、未知工具、工具异常、`MAX_ROUNDS` 主动停止、轨迹落盘     |
 | `tests/test_api.py`       | `/health`；`/chat` 的正常分支与 422 / 502 / 503 错误分支；`/knowledge` 增删查、跨客户端隔离、CORS |
 | `tests/test_knowledge.py` | 按客户端隔离、落盘后恢复、清空时删除磁盘文件、客户端标识的安全规范化                              |
+| `tests/test_vectorstore.py` | 双后端行为一致性：Top-N 顺序、维度和数量不匹配时报错、落盘/重开恢复、清空删文件（Chroma 用例在未装依赖时跳过） |
 
-## 🐳 Docker 运行（可选）
+## 🗂 向量存储后端
+
+早期实现把片段与向量塞进 Python 列表，每次检索对**全量**向量做一遍余弦扫描（O(N)）。数据量小时无感，片段上千后单次检索耗时线性上涨，重启还要把 `.npy` 全量读回内存。
+
+`vectorstore.py` 把「存」与「查」抽成一组统一方法，交给两个实现：
+
+| 后端 | 检索方式 | 适用场景 |
+|------|----------|----------|
+| `numpy`（默认） | 内存矩阵 + 全量余弦 | 单元测试、单机演示，零外部依赖 |
+| `chroma` | HNSW 近似最近邻 + 持久化 | 生产环境，片段量上千后的检索耗时不再随规模线性增长 |
+
+切换只改环境变量：
 
 ```bash
-cp .env.example .env          # 填入 DEEPSEEK_API_KEY
+RAG_VECTOR_BACKEND=chroma    # numpy / chroma / auto
+```
+
+上层 `knowledge.KnowledgeBase` 只依赖这组方法，因此换后端没有改动任何调用方。服务端模式下 `search_knowledge` 也不再需要把全量片段搬进内存，直接把 `store.search` 交给检索链路做粗排。
+
+换后端后先跑一遍自检与压测（用随机向量模拟 5000 条片段，不加载模型，秒级完成）：
+
+```bash
+python benchmark_vector.py --chunks 5000 --queries 200
+```
+
+本机实测（i7 笔记本，512 维，每种后端查询 100 次取均值）：
+
+| 片段数 | NumPy 全量扫描 | Chroma（HNSW） | 差距 |
+|--------|---------------|----------------|------|
+| 5,000 | 9.44 ms | 6.29 ms | 1.5× |
+| 20,000 | 54.36 ms | 5.06 ms | 10.7× |
+
+结论很清楚：**小规模下两者差距不大**（Chroma 还有一次查询封装的固定开销），规模上来后 NumPy 的耗时随片段数线性增长、HNSW 基本持平，差距被放大到 10 倍以上。所以两个后端都留着——单机演示与单元测试用 NumPy 零依赖，数据量上千后按环境变量切 Chroma。
+
+> 踩过的坑：Chroma（Rust 实现）单次写入上限 5461 条，超过会抛 `InternalError: Batch size of N is greater than max batch size`。写入层因此按 `BATCH_LIMIT=4000` 分批提交，并有对应单测覆盖。
+>
+> `chroma` 后端需要先 `pip install chromadb`；未安装时 `build_store` 会按 `numpy` 降级（配置写死 `chroma` 则直接报错，避免静默降级）。
+
+## 🐳 部署
+
+> 没有服务器也能上线：内网穿透（10 分钟、0 成本）、魔搭创空间（免费、长期固定链接）、自备云主机（长期自主）三条路线的完整步骤与排错清单，见 **[deploy/部署指南.md](deploy/部署指南.md)**。
+> 给平台的镜像在 `deploy/Dockerfile.space`（Streamlit + 7860 端口 + 关掉 iframe 限制）。
+
+### 一条命令拉起（API + Web 界面）
+
+```bash
+cp .env.example .env              # 填入 DEEPSEEK_API_KEY
+docker compose up -d --build
+curl http://127.0.0.1:8000/health
+```
+
+- API：`http://127.0.0.1:8000`（`/docs` 有自动生成的接口文档）
+- 界面：`http://127.0.0.1:8501`
+- 两个服务共用 `rag-data` 数据卷，界面与接口看到的是同一份知识库
+
+### 只跑接口
+
+```bash
 docker build -t rag-agent .
 docker run --rm -p 8000:8000 --env-file .env rag-agent
 ```
 
-首次构建需安装依赖并下载约 500MB 模型，耗时较长。若本地已有 `models/`，可加 `--build-arg DOWNLOAD_MODELS=false` 跳过下载，改用 `-v "$(pwd)/models:/app/models"` 挂载。
+### 镜像做了什么
 
-> 注：Docker 配置为最近补充，尚未在作者本机完成整轮构建验证。
+| 做法 | 为什么 |
+|------|--------|
+| 两阶段构建（builder → runtime） | 编译器与 pip 缓存不进最终镜像；依赖装在独立 venv 里整目录拷贝 |
+| 先 COPY `requirements.txt` 再 COPY 代码 | 改代码不会触发重新装依赖，日常迭代从几分钟降到几秒 |
+| `--build-arg DOWNLOAD_MODELS=false` | 模型改由 `-v "$(pwd)/models:/app/models"` 挂载时跳过 500MB 下载 |
+| 非 root 用户（uid 10001） | 容器被拿下时攻击者只拿到普通权限 |
+| `HEALTHCHECK` 打 `/health` | 顺带暴露 `vector_backend`，避免「以为在用 Chroma、实际退回了 NumPy」 |
+| 补装 `libgomp1` | torch 在 slim 镜像里的运行库依赖，不装会在 import 阶段直接崩 |
+
+> 说明：本机未安装 Docker，以上配置按官方镜像约定编写，首次构建若报错请把日志贴回来。
 
 ## 🧩 架构分层
 
@@ -291,7 +358,9 @@ agent.py（逻辑层）  run_agent()       → 多轮循环 / 派发工具 / 两
                             ↓ 调用
 tools.py（工具层）  TOOLS / TOOL_SCHEMAS / 知识库来源
                             ↓ 读取
-knowledge.py        KnowledgeBase     → 按客户端隔离 / 落盘持久化
+knowledge.py        KnowledgeBase     → 按客户端隔离 / 懒加载后端
+                            ↓ 委托
+vectorstore.py      双后端            → Chroma（HNSW）/ NumPy（全量扫描）
 ```
 
 因为逻辑层不引用 Streamlit，所以同一套调度逻辑：
@@ -310,9 +379,11 @@ ai/
 ├── ui.py                     # 界面（聊天记录、知识库面板、侧边栏）
 ├── api.py                    # FastAPI 服务：HTTP 接口（/chat、/knowledge）
 ├── evaluate.py               # 评测脚本（对比三种检索的命中率）
+├── benchmark_vector.py       # 向量后端自检 + 检索耗时压测
 ├── agent.py                  # Agent 主循环（工具调度 + 轨迹落盘）
 ├── tools.py                  # Agent 工具：函数本体 + 注册表 + 声明表
-├── knowledge.py              # 服务端知识库：按客户端隔离 + 落盘持久化
+├── knowledge.py              # 服务端知识库：按客户端隔离 + 懒加载后端
+├── vectorstore.py            # 向量存储抽象层：Chroma / NumPy 双后端
 ├── download_model.py         # 下载 embedding 模型
 ├── download_reranker.py      # 下载 rerank 模型
 ├── tests/                    # 单元测试（pytest）
@@ -320,9 +391,15 @@ ai/
 │   ├── test_tools.py         #   工具行为 + 安全防护 + 注册表一致性
 │   ├── test_agent.py         #   调度循环 + 兜底路径 + 轨迹落盘
 │   ├── test_api.py           #   HTTP 接口状态码、校验、跨客户端隔离
-│   └── test_knowledge.py     #   客户端隔离 + 落盘恢复
+│   ├── test_knowledge.py     #   客户端隔离 + 落盘恢复
+│   └── test_vectorstore.py   #   双后端行为一致性
 ├── pytest.ini                # pytest 配置
-├── Dockerfile                # 容器构建
+├── Dockerfile                # 容器构建（两阶段、非 root、健康检查）
+├── docker-compose.yml        # API + Web 界面一键启动
+├── deploy/                   # 上线相关
+│   ├── 部署指南.md           #   三条路线：内网穿透 / 创空间 / 云主机
+│   ├── Dockerfile.space      #   给平台用的镜像（Streamlit + 7860）
+│   └── space-README.md       #   Space 仓库的 README（含平台 frontmatter）
 ├── .dockerignore
 ├── .env.example              # 环境变量模板
 ├── requirements.txt          # 依赖清单

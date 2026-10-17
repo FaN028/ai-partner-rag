@@ -1,0 +1,66 @@
+# ============================================================
+# docker-compose.yml —— 一条命令拉起 API 与 Web 界面
+# ============================================================
+#   cp .env.example .env      # 填入 DEEPSEEK_API_KEY
+#   docker compose up -d --build
+#   curl http://127.0.0.1:8000/health
+#
+# 两个服务共用同一份数据卷：界面与接口看到的是同一批知识库文件。
+# ============================================================
+services:
+  api:
+    build:
+      context: .
+    image: rag-agent:latest
+    container_name: rag-api
+    env_file:
+      - .env
+    environment:
+      RAG_VECTOR_BACKEND: chroma
+      # 每个 worker 都会各自加载 embedding / rerank 模型，
+      # 模型常驻内存约 1GB，按机器内存调，别盲目开大
+      WEB_CONCURRENCY: "1"
+    ports:
+      - "8000:8000"
+    volumes:
+      - rag-data:/app/data
+      - rag-sessions:/app/sessions
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import sys,urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).status == 200 else 1)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+
+  ui:
+    image: rag-agent:latest
+    container_name: rag-ui
+    depends_on:
+      api:
+        condition: service_healthy
+    env_file:
+      - .env
+    command:
+      - streamlit
+      - run
+      - app.py
+      - --server.port=8501
+      - --server.address=0.0.0.0
+      - --server.headless=true
+    environment:
+      RAG_VECTOR_BACKEND: chroma
+    ports:
+      - "8501:8501"
+    volumes:
+      - rag-data:/app/data
+      - rag-sessions:/app/sessions
+    restart: unless-stopped
+
+volumes:
+  rag-data:
+  rag-sessions:

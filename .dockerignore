@@ -19,6 +19,7 @@ agent_trace.jsonl
 # 本地私人目录
 旧版本/
 笔记/
+.workbuddy/
 
 # 容器内不需要的文档与产物
 .env
