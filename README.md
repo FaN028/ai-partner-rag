@@ -299,10 +299,12 @@ RAG_VECTOR_BACKEND=chroma    # numpy / chroma / auto
 换后端后先跑一遍自检与压测（用随机向量模拟 5000 条片段，不加载模型，秒级完成）：
 
 ```bash
-python benchmark_vector.py --chunks 5000 --queries 200
+# 两种规模各跑一次，每次每种后端查询 200 次取均值
+python benchmark_vector.py --chunks 5000  --queries 200
+python benchmark_vector.py --chunks 20000 --queries 200
 ```
 
-本机实测（i7 笔记本，512 维，每种后端查询 100 次取均值）：
+本机实测（i7 笔记本，512 维；同一台机器重复跑有 ±10% 波动，量级结论稳定）：
 
 | 片段数 | NumPy 全量扫描 | Chroma（HNSW） | 差距 |
 |--------|---------------|----------------|------|
@@ -323,6 +325,12 @@ cp .env.example .env              # 填入 DEEPSEEK_API_KEY
 docker compose up -d --build
 curl http://127.0.0.1:8000/health
 ```
+
+```json
+{"status": "ok", "model": "deepseek-v4-pro", "vector_backend": "chroma", "chunks": 0}
+```
+
+`vector_backend` 是当前实际生效的后端（`numpy` / `chroma`），`chunks` 是该客户端已有的片段数。**暴露这两个字段是为了让「配了 chroma 却静默退回 numpy」这类问题立刻显形**，容器编排也用它判断实例是否就绪。
 
 - API：`http://127.0.0.1:8000`（`/docs` 有自动生成的接口文档）
 - 界面：`http://127.0.0.1:8501`
