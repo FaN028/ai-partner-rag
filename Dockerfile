@@ -62,8 +62,15 @@ ENV PYTHONUNBUFFERED=1 \
     WEB_CONCURRENCY=1 \
     PORT=8000
 
-# sentence-transformers 依赖的 torch 在 slim 镜像里缺 libgomp1，补上
-RUN apt-get update \
+# sentence-transformers 依赖的 torch 在 slim 镜像里缺 libgomp1，补上。
+# 换国内镜像源：deb.debian.org 在国内云主机上经常连不上（实测直接超时），
+# 而 apt 失败会让整次构建挂掉——这类问题在本地可能因为层缓存而看不出来。
+RUN for f in /etc/apt/sources.list /etc/apt/sources.list.d/*.sources; do \
+        if [ -f "$f" ]; then \
+            sed -i 's|deb.debian.org|mirrors.aliyun.com|g; s|security.debian.org|mirrors.aliyun.com|g' "$f"; \
+        fi; \
+    done \
+    && apt-get update \
     && apt-get install -y --no-install-recommends libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
