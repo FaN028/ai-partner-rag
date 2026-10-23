@@ -1,16 +1,26 @@
 # 运行本项目所需的依赖
 # 在项目目录执行：pip install -r requirements.txt
-streamlit              # 网页界面
-openai                 # 调用 DeepSeek API
-fastapi                # HTTP 接口服务
-uvicorn                # 运行 FastAPI 的 ASGI 服务器
-numpy                  # 向量数学计算
-sentence-transformers  # embedding + rerank 模型
-pypdf                  # 解析 PDF 文档
-python-docx            # 解析 Word 文档
-modelscope             # 下载模型（国内镜像，只需下载时用）
-chromadb               # 向量数据库后端（生产用；不装则自动退回 NumPy）
+#
+# 版本锁定为本机实测通过的组合（见 README「实测结果」）。
+# 不锁版本的话，半年后 pip 装上一个大版本更新的包就可能跑不起来——
+# 而「别人 clone 下来能不能装成功」恰恰是这类项目最常见的坑。
+#
+# 注意：torch 不写在这里。Dockerfile 会单独安装 CPU 版（Linux 下默认
+# 装的是 CUDA 版，白白多出 3.2G）；本地直接 pip install 时，
+# sentence-transformers 会自动拉取适配当前平台的 torch。
+
+streamlit==1.66.1              # 网页界面
+openai==3.37.0                 # 调用 DeepSeek API（OpenAI 兼容协议）
+fastapi==0.161.1               # HTTP 接口服务
+uvicorn==0.54.0                # 运行 FastAPI 的 ASGI 服务器
+numpy==2.5.4                   # 向量数学计算
+sentence-transformers==6.2.0   # embedding + rerank 模型
+transformers==5.20.2           # 由 sentence-transformers 引入，一并锁死防上游升级
+pypdf==6.21.2                  # 解析 PDF 文档
+python-docx==1.2.0             # 解析 Word 文档
+modelscope==1.40.2             # 下载模型（国内镜像，只需下载时用）
+chromadb==1.5.9                # 向量数据库后端（生产用；不装则自动退回 NumPy）
 
 # —— 开发与测试 ——
-pytest                 # 运行 tests/ 下的单元测试
-httpx                  # FastAPI TestClient 依赖
+pytest==9.1.1                  # 运行 tests/ 下的单元测试
+httpx==0.28.1                  # FastAPI TestClient 依赖

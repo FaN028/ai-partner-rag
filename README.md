@@ -349,6 +349,7 @@ docker run --rm -p 8000:8000 --env-file .env rag-agent
 |------|--------|
 | 两阶段构建（builder → runtime） | 编译器与 pip 缓存不进最终镜像；依赖装在独立 venv 里整目录拷贝 |
 | 先 COPY `requirements.txt` 再 COPY 代码 | 改代码不会触发重新装依赖，日常迭代从几分钟降到几秒 |
+| `requirements.txt` 中锁定版本 | 半年后上游发个大版本，构建不会莫名失败；`torch` 例外，由下面一行单独装 CPU 版 |
 | torch 先单独装 CPU 版 | Linux 下默认装 CUDA 版，会连带 3.2G 的 `nvidia-*` 库；容器内无 GPU，这部分纯属体积浪费 |
 | 建用户与目录放在拷贝模型之前，用 `COPY --chown` | `chown -R /app` 放在拷贝模型之后，会因写时复制把整个模型目录重写一层，白多吃 2.3G |
 | 删掉模型的 `onnx/` 与 `pytorch_model.bin` | 同一份权重的重复副本；`sentence-transformers` 只读 safetensors，onnx 仅 optimum 推理时才需要 |
@@ -372,7 +373,7 @@ docker run --rm -p 8000:8000 --env-file .env rag-agent
 | `docker compose up -d` | `rag-api` 先 healthy，`rag-ui` 再启动；两者挂同一 `rag-data` 卷 |
 | 错误分支 | 上游返回 402 时，本服务按设计返回 **502** |
 
-> 说明：以上为**本地容器化**的验证结果，未部署到公网。构建过程可复现——依赖未锁版本，若未来某个包发新版导致构建失败，请在 issue 里贴日志。
+> 说明：以上为**本地容器化**的验证结果，未部署到公网。依赖已在 `requirements.txt` 中锁定版本（除 torch 由 Dockerfile 单独装 CPU 版），上面这轮构建即是用锁定版本跑出来的。
 
 ## 🧩 架构分层
 
