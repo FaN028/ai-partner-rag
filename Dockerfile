@@ -26,14 +26,20 @@ ENV PATH="/opt/venv/bin:$PATH"
 
 # 先单独拷贝依赖清单：只要它没变，改代码不会触发重新安装
 COPY requirements.txt .
-RUN pip install --upgrade pip && pip install -r requirements.txt
+# torch 先单独装 CPU 版：Linux 下 pip 默认装 CUDA 版，会连带 3.2G 的
+# nvidia-* 库，而容器内无 GPU，这部分纯属体积浪费。先装 CPU 版后，
+# requirements 里的 sentence-transformers 会直接复用，不再拉 CUDA 依赖。
+RUN pip install --upgrade pip \
+    && pip install --index-url https://download.pytorch.org/whl/cpu torch \
+    && pip install -r requirements.txt
 
-# 下载模型（走 ModelScope 国内镜像，两个模型合计约 3.4G，去重后约 2.2G）。
+# 下载模型（走 ModelScope 国内镜像，原始约 3.4G）。
 # 若打算用 -v 挂载本地 models/，加 --build-arg DOWNLOAD_MODELS=false 跳过。
 ARG DOWNLOAD_MODELS=true
 COPY download_model.py download_reranker.py ./
-# 两个模型都同时带了 safetensors 与 pytorch_model.bin（各 1.1G），留一份就够：
-# 有 safetensors 就删掉 .bin，镜像直接小 1.2G。
+# 同一份权重常带多个副本，只留 sentence-transformers 实际会读的那份：
+#   · pytorch_model.bin 与 model.safetensors 二选一（各 1.1G）
+#   · onnx/ 目录只在 optimum / onnxruntime 推理时才用得上，本项目不读（1.1G）
 RUN if [ "$DOWNLOAD_MODELS" = "true" ]; then \
         python download_model.py && python download_reranker.py; \
     fi \
@@ -42,6 +48,7 @@ RUN if [ "$DOWNLOAD_MODELS" = "true" ]; then \
          if [ -f "$d/model.safetensors" ] && [ -f "$d/pytorch_model.bin" ]; then \
            rm -f "$d/pytorch_model.bin"; \
          fi; \
+         rm -rf "$d/onnx"; \
        done \
     && du -sh models
 
@@ -62,13 +69,17 @@ RUN apt-get update \
 
 WORKDIR /app
 
-COPY --from=builder /opt/venv /opt/venv
-COPY --from=builder /app/models /app/models
-
-# 以非 root 用户运行：容器被拿下时，攻击者拿到的也只是普通权限
+# 以非 root 用户运行：容器被拿下时，攻击者拿到的也只是普通权限。
+# 注意顺序：用户与目录必须在拷贝大目录「之前」建好，且不要事后 chown -R /app。
+# chown 会改写每个文件的元数据，Docker 的写时复制会把整个模型目录重新落成一个新层
+# ——实测因此白白多出 2.3G 的镜像体积。
 RUN useradd --create-home --uid 10001 appuser \
     && mkdir -p /app/data /app/sessions \
     && chown -R appuser:appuser /app
+
+# COPY --chown 让文件直接落成 appuser 所有，避免额外一层
+COPY --from=builder --chown=appuser:appuser /opt/venv /opt/venv
+COPY --from=builder --chown=appuser:appuser /app/models /app/models
 
 COPY --chown=appuser:appuser . .
 

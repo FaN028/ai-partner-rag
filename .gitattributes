@@ -1,0 +1,7 @@
+# 统一换行符。
+# 本机（Windows）core.autocrlf=true，checkout 时会把文本文件转成 CRLF；
+# 而 Dockerfile 里用反斜杠做续行、shell 脚本对行尾敏感，
+# CRLF 会让 \ 后面多一个 \r，命令被拼错。这两类文件固定为 LF。
+Dockerfile          text eol=lf
+*.sh                text eol=lf
+*.dockerfile        text eol=lf

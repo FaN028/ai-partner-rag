@@ -19,7 +19,7 @@
 - **HTTP 接口服务** —— 以 FastAPI 暴露 `POST /chat`、`POST /knowledge` 等接口，同一套调度逻辑可供任意前端调用
 - **多客户端隔离与知识库持久化** —— 请求头 `X-Client-Id` 区分各自的知识库，数据落盘后服务重启自动恢复
 - **向量存储可切换** —— 一套接口两种后端：Chroma（HNSW 近似最近邻 + 持久化）/ NumPy（全量扫描，零依赖降级），换后端不动调用方代码
-- **容器化部署** —— 两阶段构建、非 root 运行、`/health` 就绪探针、`docker compose` 一条命令拉起 API 与界面
+- **容器化运行** —— 两阶段构建、非 root 运行、`/health` 就绪探针、`docker compose` 一条命令拉起 API 与界面；镜像 5.4GB，已在本地完整实测（见「实测结果」）
 
 ## 🎬 效果演示
 
@@ -349,12 +349,30 @@ docker run --rm -p 8000:8000 --env-file .env rag-agent
 |------|--------|
 | 两阶段构建（builder → runtime） | 编译器与 pip 缓存不进最终镜像；依赖装在独立 venv 里整目录拷贝 |
 | 先 COPY `requirements.txt` 再 COPY 代码 | 改代码不会触发重新装依赖，日常迭代从几分钟降到几秒 |
-| `--build-arg DOWNLOAD_MODELS=false` | 模型改由 `-v "$(pwd)/models:/app/models"` 挂载时跳过 500MB 下载 |
+| torch 先单独装 CPU 版 | Linux 下默认装 CUDA 版，会连带 3.2G 的 `nvidia-*` 库；容器内无 GPU，这部分纯属体积浪费 |
+| 建用户与目录放在拷贝模型之前，用 `COPY --chown` | `chown -R /app` 放在拷贝模型之后，会因写时复制把整个模型目录重写一层，白多吃 2.3G |
+| 删掉模型的 `onnx/` 与 `pytorch_model.bin` | 同一份权重的重复副本；`sentence-transformers` 只读 safetensors，onnx 仅 optimum 推理时才需要 |
+| `--build-arg DOWNLOAD_MODELS=false` | 模型改由 `-v "$(pwd)/models:/app/models"` 挂载时跳过下载 |
 | 非 root 用户（uid 10001） | 容器被拿下时攻击者只拿到普通权限 |
 | `HEALTHCHECK` 打 `/health` | 顺带暴露 `vector_backend`，避免「以为在用 Chroma、实际退回了 NumPy」 |
 | 补装 `libgomp1` | torch 在 slim 镜像里的运行库依赖，不装会在 import 阶段直接崩 |
 
-> 说明：本机未安装 Docker，以上配置按官方镜像约定编写，首次构建若报错请把日志贴回来。
+### 实测结果
+
+在 Windows + Docker Desktop（Docker 29.9.2）上完整跑过一轮：
+
+| 项 | 结果 |
+|------|------|
+| `docker build`（含下载 2.2G 模型） | 8 分 09 秒，无报错 |
+| 镜像体积 | **5.4 GB**（优化前 11.9 GB：CUDA 依赖 3.2G + chown 重复层 2.3G + onnx 1.1G） |
+| 容器启动 + `HEALTHCHECK` | `Up (healthy)`，非 root（uid 10001） |
+| `GET /health` | `{"status":"ok","model":"deepseek-v4-pro","vector_backend":"chroma","chunks":0}` |
+| 上传文档 → 切块 → 向量化 → 落盘 | `{"sources":["…"],"chunks":1}` |
+| `POST /chat`（Agent 调度 + 检索 + rerank） | 正常返回答案，`trace` 中有 `search_knowledge` 调用记录 |
+| `docker compose up -d` | `rag-api` 先 healthy，`rag-ui` 再启动；两者挂同一 `rag-data` 卷 |
+| 错误分支 | 上游返回 402 时，本服务按设计返回 **502** |
+
+> 说明：以上为**本地容器化**的验证结果，未部署到公网。构建过程可复现——依赖未锁版本，若未来某个包发新版导致构建失败，请在 issue 里贴日志。
 
 ## 🧩 架构分层
 
