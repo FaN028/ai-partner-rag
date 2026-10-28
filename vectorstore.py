@@ -38,12 +38,19 @@ def _as_matrix(vectors) -> np.ndarray:
     return matrix
 
 
-def _cosine_scores(query: np.ndarray, matrix: np.ndarray) -> np.ndarray:
-    """批量余弦相似度；分母为 0 时退化为 0，避免除零告警。"""
+def _cosine_scores(query: np.ndarray, matrix: np.ndarray, norms=None) -> np.ndarray:
+    """批量余弦相似度；分母为 0 时退化为 0，避免除零告警。
+
+    norms 可传入预先算好的全库模长。模长只与库内向量有关，与查询无关，
+    缓存下来即可省掉每次查询对全库重算一遍 O(N·D) 的代价。
+    """
     query_norm = float(np.linalg.norm(query))
-    row_norms = np.linalg.norm(matrix, axis=1)
+    if query_norm == 0:
+        query_norm = 1e-12
+    row_norms = np.linalg.norm(matrix, axis=1) if norms is None else norms
     denominator = row_norms * query_norm
-    denominator[denominator == 0] = 1e-12
+    # 用 where 而不是原地赋值：norms 是缓存数组，不能被修改
+    denominator = np.where(denominator == 0, 1e-12, denominator)
     return (matrix @ query) / denominator
 
 
@@ -60,6 +67,32 @@ class NumpyVectorStore:
         self._chunks: list[str] = []
         self._vectors: list[np.ndarray] = []
         self._sources: list[str] = []
+        # 检索用的索引缓存：矩阵与全库模长只在数据变动后惰性重建一次。
+        # 片段与向量本身仍以 list 保存（对外接口不变），这里只是加速查询。
+        self._matrix: np.ndarray | None = None
+        self._norms: np.ndarray | None = None
+
+    # ---------------- 索引缓存 ----------------
+
+    def _invalidate_index(self) -> None:
+        self._matrix = None
+        self._norms = None
+
+    def _index(self) -> tuple[np.ndarray, np.ndarray]:
+        """返回 (N, D) 矩阵与其模长；首次查询或数据变更后重建。"""
+        if self._matrix is None:
+            matrix = (
+                np.vstack(self._vectors).astype("float32", copy=False)
+                if self._vectors
+                else np.zeros((0, 0), dtype="float32")
+            )
+            norms = (
+                np.linalg.norm(matrix, axis=1)
+                if matrix.size
+                else np.zeros(0, dtype="float32")
+            )
+            self._matrix, self._norms = matrix, norms
+        return self._matrix, self._norms
 
     # ---------------- 写 ----------------
 
@@ -73,12 +106,14 @@ class NumpyVectorStore:
         self._vectors.extend(list(matrix))
         if source and source not in self._sources:
             self._sources.append(source)
+        self._invalidate_index()
         return len(self._chunks)
 
     def clear(self) -> None:
         self._chunks.clear()
         self._vectors.clear()
         self._sources.clear()
+        self._invalidate_index()
         if self.directory.exists():
             for file in self.directory.iterdir():
                 if file.is_file():
@@ -103,15 +138,29 @@ class NumpyVectorStore:
         if not self._chunks or limit <= 0:
             return []
         query = np.asarray(vector, dtype="float32").reshape(-1)
-        matrix = np.vstack(self._vectors)
+        matrix, norms = self._index()
         if matrix.shape[1] != query.shape[0]:
             raise VectorStoreError(
                 f"查询向量维度({query.shape[0]})与库内维度({matrix.shape[1]})不一致。"
             )
-        scores = _cosine_scores(query, matrix)
+        scores = _cosine_scores(query, matrix, norms)
+
+        total = len(scores)
+        k = min(limit, total)
+        if k == total:
+            candidates = np.arange(total)
+        else:
+            # 先 O(N) 选出前 k 名，再只对这 k 个做精确排序。
+            # 与边界同分的片段可能被 argpartition 任意丢弃，这里按分数补回来，
+            # 保证「同分时按原始顺序」这一语义不变。
+            picked = np.argpartition(-scores, k - 1)[:k]
+            boundary = scores[picked].min()
+            candidates = np.flatnonzero(scores >= boundary)
+            if len(candidates) > k * 8:  # 极端并列（如全零向量）退回稳定全排序，避免退化
+                candidates = np.argsort(-scores, kind="stable")[:k]
         # 同分时按原始顺序，保证结果可复现
-        order = sorted(range(len(scores)), key=lambda i: (-scores[i], i))
-        return [self._chunks[i] for i in order[:limit]]
+        order = sorted(candidates.tolist(), key=lambda i: (-scores[i], i))
+        return [self._chunks[i] for i in order[:k]]
 
     # ---------------- 持久化 ----------------
 
@@ -150,6 +199,7 @@ class NumpyVectorStore:
         self._chunks = chunks
         self._vectors = vectors
         self._sources = sources
+        self._invalidate_index()
         return True
 
 
@@ -180,6 +230,9 @@ class ChromaVectorStore:
         self._collection = self._open_collection()
         # 用于统计本次进程写入的片段数，避免每次 info() 都打到数据库
         self._added = 0
+        # 片段数缓存：query 里要用它算 n_results，若每次都 count() 就是
+        # 每次检索多一次数据库往返，实测占单次耗时的一大半。
+        self._cached_count: int | None = None
 
     def _open_collection(self):
         """按客户端建独立集合；集合名只允许字母数字与 -_，故先做一次清洗。"""
@@ -219,6 +272,7 @@ class ChromaVectorStore:
             )
             added += end - start
         self._added += added
+        self._cached_count = None
         return self.count()
 
     def clear(self) -> None:
@@ -228,6 +282,7 @@ class ChromaVectorStore:
             pass
         self._collection = self._open_collection()
         self._added = 0
+        self._cached_count = 0
 
     # ---------------- 读 ----------------
 
@@ -253,7 +308,9 @@ class ChromaVectorStore:
         return seen
 
     def count(self) -> int:
-        return int(self._collection.count())
+        if self._cached_count is None:
+            self._cached_count = int(self._collection.count())
+        return self._cached_count
 
     def query(self, vector, limit: int) -> list[str]:
         total = self.count()

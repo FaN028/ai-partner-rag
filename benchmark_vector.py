@@ -86,7 +86,14 @@ def main() -> None:
 
         print()
         if chroma_ms:
-            print(f"结论：Chroma 比全量扫描快 {numpy_ms / chroma_ms:.1f}×（同一台机器、同一批数据）")
+            ratio = numpy_ms / chroma_ms
+            if ratio >= 1:
+                print(f"结论：Chroma（HNSW）快 {ratio:.1f}×（同一台机器、同一批数据）")
+            else:
+                print(
+                    f"结论：全量扫描反而快 {1 / ratio:.1f}× —— 该规模下 HNSW 的"
+                    "固定开销（封装 + 段合并）压过了它的对数级优势"
+                )
         else:
             print("结论：NumPy 后端自检通过；装上 chromadb 后重跑可看到两种后端的耗时对比。")
             print("      安装：pip install chromadb")
