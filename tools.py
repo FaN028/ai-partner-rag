@@ -4,6 +4,7 @@
 import re
 from datetime import datetime
 
+import config
 import knowledge
 
 # ============================================================
@@ -95,7 +96,7 @@ def calculate(expression: str) -> str:
 
 def get_current_time() -> str:
     """获取当前日期与时间，格式 YYYY-MM-DD HH:MM:SS。"""
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    return datetime.now(config.TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")
 
 
 # 工具注册表：工具名 -> 可调用对象，供调度端按名派发。

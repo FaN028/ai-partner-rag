@@ -3,6 +3,11 @@
 # ============================================================
 import os
 from pathlib import Path
+from zoneinfo import ZoneInfo
+
+# 显式时区：容器默认是 UTC，不指定的话 datetime.now() 会比北京时间慢 8 小时，
+# 会话名和「查时间」工具都会因此答错。写死时区，本地与线上结果一致。
+TIMEZONE = ZoneInfo("Asia/Shanghai")
 
 APP_TITLE = "私有知识库 RAG + Agent 问答系统"
 SESSIONS_DIR = Path("sessions")

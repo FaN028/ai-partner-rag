@@ -125,8 +125,25 @@ def init_session_state() -> None:
         st.session_state.current_session = generate_session_name()
 
     # —— 知识库相关的状态 ——
+    # 首次进入会话时，先尝试把「服务端已预置的知识库」装进会话状态。
+    # 知识库模式读的是 session_state，不会自动读服务端那份；
+    # 演示实例就是靠这一步让访客打开就能提问（否则永远是空库）。
     if "knowledge_chunks" not in st.session_state:
-        st.session_state.knowledge_chunks = []
+        preset_chunks, preset_vectors, preset_sources = [], [], []
+        try:
+            import knowledge
+
+            store = knowledge.get_store()
+            # 注意：chunks / vectors / sources 都是 @property，不是方法
+            preset_chunks = list(store.chunks)
+            preset_vectors = list(store.vectors)
+            preset_sources = list(store.sources)
+        except Exception:
+            # 预置库不可用不该影响正常上传流程，静默降级为空
+            preset_chunks, preset_vectors, preset_sources = [], [], []
+        st.session_state.knowledge_chunks = list(preset_chunks)
+        st.session_state.knowledge_vectors = list(preset_vectors)
+        st.session_state.knowledge_sources = list(preset_sources)
     if "knowledge_vectors" not in st.session_state:
         st.session_state.knowledge_vectors = []
     if "knowledge_sources" not in st.session_state:

@@ -24,3 +24,4 @@ chromadb==1.5.9                # 向量数据库后端（生产用；不装则�
 # —— 开发与测试 ——
 pytest==9.1.1                  # 运行 tests/ 下的单元测试
 httpx==0.28.1                  # FastAPI TestClient 依赖
+tzdata==2026.5                  # Windows 缺 IANA 时区库，ZoneInfo 需要它

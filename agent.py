@@ -97,7 +97,7 @@ def save_trace(question: str, trace: list, path: Path = TRACE_PATH) -> None:
     if not trace:
         return
 
-    stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    stamp = datetime.now(config.TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")
     with open(path, "a", encoding="utf-8") as f:
         for step in trace:
             record = {

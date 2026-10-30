@@ -12,7 +12,7 @@ import config
 
 def generate_session_name() -> str:
     """生成一个基于当前时间的唯一会话名称。"""
-    return datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    return datetime.now(config.TIMEZONE).strftime("%Y-%m-%d_%H-%M-%S")
 
 
 def get_session_path(session_name: str) -> Path:
